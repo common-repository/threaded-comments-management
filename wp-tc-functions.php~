@@ -1,0 +1,573 @@
+<?php
+require_once(ABSPATH . 'wp-admin/includes/class-wp-list-table.php');
+require_once(ABSPATH . 'wp-admin/includes/class-wp-comments-list-table.php');
+require_once('class-wp-tc-comments-list-table.php');
+
+function tc_redirect_to_threaded_view(){
+	if(absint(get_option('thread_comments')) == 1){
+		wp_redirect('wp-tc-edit-comments.php?' . http_build_query( $_REQUEST ));
+	}
+}
+
+function tc_styles(){
+	$admin_handle = 'tc_css';
+	$admin_stylesheet = plugins_url( 'tc.css' , __FILE__ );
+	wp_enqueue_style( $admin_handle, $admin_stylesheet );
+}
+
+function tc_init(){
+
+    wp_register_script('amplify', plugins_url( 'js/amplify/amplify.min.js' , __FILE__ ), array('jquery'));
+    wp_enqueue_script('amplify');    
+    wp_register_script('tc_js', plugins_url( 'js/jquery.wptc.dev.js' , __FILE__ ), array('jquery','suggest'));
+    wp_enqueue_script('tc_js');
+    wp_enqueue_script('jquery-ui-core');
+    wp_enqueue_script('jquery-ui-draggable');
+    wp_enqueue_script('jquery-ui-droppable');
+     wp_enqueue_script( 'suggest' );
+
+	if(absint(get_option('thread_comments')) == 1){
+		
+		add_meta_box( 'move_reparent', __('Move / Reparent comment'),
+		                                'tc_move_reparent_widget',
+		                                'comment', 'normal', 'core'
+		                                );
+    }
+}
+
+
+function tc_deregister_sortable( $columns ){
+	unset($columns['author']);
+	return $columns;
+}
+
+
+function tc_ajax_get_comment_subthread(){
+     $requestedComments = array();
+
+     $commentId = $_REQUEST['c'];
+     $commentIds = $_REQUEST['cs'];
+     
+     $single = $_REQUEST['single'];
+     
+     if(!isset($commentIds)){
+        $commentIds = array($commentId);
+     }
+
+     foreach($commentIds as $commentId){
+  
+         $comment = get_comment($commentId);
+         $parent = get_comment($parentId);
+     
+         
+         $subthread = tc_comments_get(array(
+              'comment_ID'   => $commentId,
+              'post_id'      => $comment -> comment_post_ID,
+              'subthread'    => 'true',
+         ));
+
+         $_subthread = tc_comments_flatten($subthread); 
+     
+         if($single == "true"){
+            $_subthread = tc_filter($_subthread, $commentId, 'true');
+         }        
+        
+         foreach($_subthread as $comment){
+              $comment -> comment_parent_author = get_comment($comment  -> comment_parent) -> comment_author;
+              $comment -> comment_author_avatar = get_avatar($comment, 32);
+         }    
+
+         if($single == "true"){
+            $_subthread = $_subthread[0];
+         }
+
+         $requestedComments[] = $_subthread; 
+    }
+
+     echo json_encode($requestedComments);     
+     die();
+}
+
+function tc_ajax_move_by_title(){
+	$id = tc_get_posts_by_title( $_REQUEST['title'] );
+	$id = absint( $id[0]['ID'] );
+	$comment_id = absint( $_REQUEST['c'] );
+	$comment = get_comment($comment_id);
+	$single = $_REQUEST['single'];
+	if($comment -> comment_post_ID != $id)
+		tc_comment_move(array($comment_id), array($id), array($single));
+	die();
+}
+
+function tc_ajax_reparent_comment(){
+	$parent_id = absint( $_REQUEST['parent'] );
+	$comment_id = absint( $_REQUEST['c'] );
+	$single = $_REQUEST['single'];
+	if($comment_id  != $parent_id){
+		tc_comment_reparent(array($comment_id), array($parent_id), array($single));
+          //$comments = tc_comments_get("comment_ID=$comment_id");     
+          //echo tc_comments_flatten($comments);     
+     }
+	die();
+}
+
+function tc_ajax_move_comment(){
+	$post_id = absint( $_REQUEST['postid'] );
+	$comment_id = absint( $_REQUEST['c'] );
+    $parent_id = absint( $_REQUEST['parent'] );
+	$single = $_REQUEST['single'];
+	//if($comment_id  != $parent_id){
+		tc_comment_move(array($comment_id), array($post_id), array($single));
+        tc_comment_reparent(array($comment_id), array($parent_id), array($single));
+          //$comments = tc_comments_get("comment_ID=$comment_id");     
+          //echo tc_comments_flatten($comments);     
+     //}
+	die();
+}
+
+function tc_get_posts_by_title($title){
+	global $wpdb;
+	
+	$query = "
+	SELECT P.ID, P.post_title
+	FROM {$wpdb->prefix}posts as P
+	WHERE
+	( P.post_type = 'post'
+	OR P.post_type = 'page' )
+	AND P.post_status = 'publish'
+	AND P.post_title LIKE '%{$title}%'
+	ORDER BY P.post_date
+	DESC;
+	";
+	
+ 	$posts = $wpdb->get_results($query, ARRAY_A);
+	return $posts;
+}
+
+function tc_ajax_post_search(){
+	$q = $_GET['q'];
+	$results = tc_get_posts_by_title($q);
+	foreach($results as $post){
+		echo $post['post_title']."|";
+	}
+
+	die();
+}
+
+function tc_move_reparent_widget(){
+	$comment_id = absint( $_GET['c'] );
+	$comment = get_comment($comment_id);
+	?>
+	<div id='move-reparent-box' style='overflow:hidden;'>
+		<div id="major-actions">
+		<?php /*<a class='button' href='<?php echo admin_url()."edit-comments.php?p=".$comment->comment_post_ID."&view=threaded&t=".$comment_id ?>'>Inspect thread</a>
+				<span class='spacer'></span>
+				<a class='button' href='<?php echo admin_url()."edit-comments.php?p=".$comment->comment_post_ID."&view=threaded&c=".$comment_id ?>'>Re-parent</a>
+				<a class='button' href='<?php echo admin_url()."edit.php?p=".$comment->comment_post_ID."&view=threaded&c=".$comment_id ?>'>Move</a>
+				<span class='spacer'></span> */?>
+		<form id='move-by-title' action='wp-tc-ajax.php' method='get'>
+		<input type="text" id="move-to" name="move-to" size="16" value="" tabindex="6"/>
+		<input type="submit" name="move" id="move" class="button-primary" value="Move" tabindex="4">
+		</form>
+		<div class="clear"></div>
+		</div>
+	</div>
+            <?php
+}
+
+function tc_comments_get($args){
+    $walker = new Walker_Comment_Threaded() ;
+    $defaults = array('max_depth' => '10', 'post_id' => '', 'single' => 'false', 'comment_ID' => '0', 'page' => '1', 'per_page' => '20', 'offset' => '-1', 'subthread' => 'false');
+  
+    $args = wp_parse_args($args, $defaults);
+    if(!$args['post_id']){ 
+          $args['post_id'] = get_comment($args['comment_ID']);
+          $post_ID = get_comment($args['comment_ID']);
+          $args['post_id'] = $post_ID -> comment_post_ID;    
+    }
+    
+     if($args['offset'] != '-1'){
+          $comments = $walker->paged_walk(get_comments('post_id='.$args['post_id']), $args['max_depth'], $args['offset'] / $args['per_page'] + 1, $args['per_page'], $args);
+     } else {
+          $comments = $walker->walk(get_comments('post_id='.$args['post_id']), $args['max_depth'], $args);
+     }
+	$comments = json_decode($comments);
+    if(!is_array($args['comment_ID'])){
+        $args['comment_ID'] = array($args['comment_ID']);
+    }
+    
+    if(!is_array($args['single'])){
+        $args['single'] = array($args['single']);
+    }
+
+
+    
+    $valid_comments = $comments;
+     
+    if($args['subthread'] == 'true'){
+         $valid_comments = array();
+         
+         foreach($comments as $comment){
+             $comment = tc_filter($comment, $args['comment_ID'], $args['single']);
+             if($comment){
+                 $valid_comments[] = $comment;
+             }
+         }
+         
+         while(count($valid_comments) === 1 && is_array($valid_comments)){
+             $valid_comments = $valid_comments[0];
+         }
+         
+          if(!is_array($valid_comments)) $valid_comments = array( $valid_comments );
+    }
+
+    return $valid_comments;
+}
+
+function tc_comments_flatten($array, &$numberOfChildren = 0) {
+  if (!is_array($array)) { 
+    return FALSE; 
+  } else if(isset($array['comment_ID'])) {
+  	return $array;
+  }
+  
+  $result = array(); 
+  foreach($array as $arr){
+  	$nOC = 0;
+  	$arr = object2array($arr);
+  	if(isset($arr['comment_children'])){
+  		$children = $arr['comment_children'];
+  		unset($arr['comment_children']);
+ 
+		$children = tc_comments_flatten($children, $nOC);
+  		$obj = array2object($arr);
+  		$obj -> number_of_children = $nOC;
+  		$result[] = $obj;
+  		foreach($children as $child){
+  			$result[] = $child;
+  		}
+  	} else {
+  		$obj = array2object($arr);
+  		$obj -> number_of_children = $nOC;
+  		$result[] = $obj;
+  	}
+  	$numberOfChildren += (1 + $nOC);
+  }
+  return $result; 
+} 
+
+
+function tc_filter($comment, $comment_ID, $single){
+    $key = array_search($comment->comment_ID, $comment_ID);
+    
+    if($key === false){
+        $valid_children = array();
+        if(isset($comment->comment_children)){
+            foreach($comment->comment_children as $child){
+                $child = tc_filter($child, $comment_ID, $single);
+                if($child){
+                    $valid_children[] = $child;
+                }
+            }
+            return $valid_children;
+        }
+    } else{
+        if(strcasecmp($single[$key], 'true') === 0){
+            unset($comment->comment_children);
+        }
+        
+        return $comment;    
+    }
+}
+
+function array2object($array) {
+ 
+    if (is_array($array)) {
+        $obj = new StdClass();
+ 
+        foreach ($array as $key => $val){
+            $obj->$key = $val;
+        }
+    }
+    else { $obj = $array; }
+ 
+    return $obj;
+}
+
+function object2array($object) {
+    if (is_object($object)) {
+        foreach ($object as $key => $value) {
+            $array[$key] = $value;
+        }
+    }
+    else {
+        $array = $object;
+    }
+    return $array;
+}
+
+function tc_update_comment($commentarr) {
+	global $wpdb;
+	// First, get all of the original fields
+	$comment = get_comment($commentarr['comment_ID'], ARRAY_A);
+
+	// Escape data pulled from DB.
+	$comment = esc_sql($comment);
+
+	$old_status = $comment['comment_approved'];
+
+	// Merge old and new fields with new fields overwriting old ones.
+	$commentarr = array_merge($comment, $commentarr);
+
+	$commentarr = wp_filter_comment( $commentarr );
+
+	// Now extract the merged array.
+	extract(stripslashes_deep($commentarr), EXTR_SKIP);
+
+	$comment_content = apply_filters('comment_save_pre', $comment_content);
+
+	$comment_date_gmt = get_gmt_from_date($comment_date);
+
+	if ( !isset($comment_approved) )
+		$comment_approved = 1;
+	else if ( 'hold' == $comment_approved )
+		$comment_approved = 0;
+	else if ( 'approve' == $comment_approved )
+		$comment_approved = 1;
+
+	$data = compact('comment_content', 'comment_author', 'comment_author_email', 'comment_approved', 'comment_karma', 'comment_author_url', 'comment_date', 'comment_date_gmt', 'comment_post_ID', 'comment_parent');
+	$rval = $wpdb->update( $wpdb->comments, $data, compact( 'comment_ID' ) );
+
+	clean_comment_cache($comment_ID);
+	wp_update_comment_count($comment_post_ID);
+	do_action('edit_comment', $comment_ID);
+	$comment = get_comment($comment_ID);
+	wp_transition_comment_status($comment->comment_approved, $old_status, $comment);
+	return $rval;
+}
+
+//tc_comment_move(array(6), array(1), array('false'));
+
+function tc_comment_move($comment_idarr, $comment_postarr, $singlearr = null){
+    for($i = 0; $i < count($comment_idarr); $i++){
+        $comment_id = $comment_idarr[$i];
+        $comment_post = $comment_postarr[$i];
+        $single = $singlearr[$i];
+        $post_ID = get_comment($comment_id);
+        $post_ID = $post_ID -> comment_post_ID;
+        
+        do_action('move_comment', $comment_id);
+        
+        $comment_data_new = array(
+          'comment_ID' => $comment_id,
+          'comment_post_ID' => $comment_post,
+          'comment_parent' => 0,
+        );
+        
+               
+        $comment_thread = tc_comments_get(
+                              array(
+                                  'post_id' => $post_ID, 
+                                  'comment_ID' => $comment_id,
+                                  'single' => 'false',
+                                  'subthread' => 'true')
+                               );
+        $comment_thread = $comment_thread[0];
+        echo "<pre>";
+        var_dump($comment_thread);
+        echo "</pre>";
+            if(isset($comment_thread -> comment_children)){
+                echo "Edit children\n";
+                $comment_children =  $comment_thread -> comment_children;
+                echo $single;
+                if(strcasecmp($single, 'false') === 0){
+                    foreach($comment_children as $child){
+                        echo "<pre>";
+                        var_dump($child);
+
+                        $comment_child_id = $child -> comment_ID;
+                        
+                        do_action('move_comment', $comment_child_id);
+                        
+                        $comment_child_data_new = array(
+                          'comment_ID' => $comment_child_id,
+                          'comment_post_ID' => $comment_post,
+                        );
+                          
+                        var_dump($comment_child_data_new);
+                        echo "</pre>";
+
+                        tc_update_comment($comment_child_data_new);
+                        
+                        do_action('moved_comment', $comment_child_id);
+                        
+                        tc_child_move($child, $comment_post);
+                    }
+                } else {
+                    foreach($comment_children as $child){
+                        $comment_child_id = $child -> comment_ID;
+                        
+                        do_action('reparent_comment', $comment_child_id);
+                        
+                        $comment_child_data_new = array(
+                          'comment_ID' => $comment_child_id,
+                          'comment_parent' => $comment_thread -> parent_ID,
+                        );  
+                        
+                        tc_update_comment($comment_child_data_new);
+                        
+                        do_action('reparented_comment', $comment_child_id);
+                    }
+                }
+            }
+        
+        tc_update_comment($comment_data_new);
+        
+        do_action('moved_comment', $comment_id);
+        
+    }
+
+    return true;
+}
+
+function tc_child_move($comment, $comment_post){
+    if(isset($comment -> comment_children)){
+        $comment_children = $comment -> comment_children;
+        foreach($comment_children as $child){
+            $comment_child_id = $child -> comment_ID;
+            
+            do_action('move_comment', $comment_child_id);
+            
+            $comment_child_data_new = array(
+              'comment_ID' => $comment_child_id,
+              'comment_post_ID' => $comment_post,
+            );
+              
+            tc_update_comment($comment_child_data_new);
+            
+            do_action('moved_comment', $comment_child_id);
+        }
+    }
+}
+
+
+function tc_comment_reparent($comment_idarr, $comment_parentarr, $singlearr = null){
+    for($i = 0; $i < count($comment_idarr); $i++){
+        $comment_id = $comment_idarr[$i];
+        $comment_parent = $comment_parentarr[$i];
+        $single = $singlearr[$i];
+        $post_ID = get_comment($comment_id);
+        $post_ID = $post_ID -> comment_post_ID;
+
+        do_action('reparent_comment', $comment_id);
+        
+        $comment_data_new = array(
+          'comment_ID' => $comment_id,
+          'comment_parent' => $comment_parent,
+        );
+        
+        if(strcasecmp($single, 'true') === 0){
+            $comment_thread = tc_comments_get(
+                                  array(
+                                      'post_id' => $post_ID, 
+                                      'comment_ID' => $comment_id,
+                                      'single' => 'false',
+                                      'subthread' => 'true')
+                                   );
+            $comment_thread = $comment_thread[0];
+            if(isset($comment_thread -> comment_children)){
+                $comment_children =  $comment_thread -> comment_children;
+                foreach($comment_children as $child){
+                    $comment_child_id = $child -> comment_ID;
+                    
+                    $comment_child_data_new = array(
+                      'comment_ID' => $comment_child_id,
+                      'comment_parent' => $comment_thread -> parent_ID,
+                    );  
+                    
+                    tc_update_comment($comment_child_data_new);
+                }
+            }
+        }
+        
+        tc_update_comment($comment_data_new);
+        
+        do_action('reparented_comment', $comment_id);
+    }
+    
+    return true;
+}
+
+function tc_install(){
+$src = WP_PLUGIN_DIR . "/trunk/wp-tc-edit-comments.php";
+     $target = ABSPATH . "wp-admin/wp-tc-edit-comments.php";
+     link($src, $target);
+
+     $src = WP_PLUGIN_DIR . "/trunk/class-wp-tc-comments-list-table.php"; 
+     $target = ABSPATH . "wp-admin/includes/class-wp-tc-comments-list-table.php";
+   
+     link($src, $target);
+}
+
+function tc_uninstall(){
+     $target = ABSPATH . "wp-admin/wp-tc-edit-comments.php";
+     unlink($target);
+
+     $target = ABSPATH . "wp-admin/includes/class-wp-tc-comments-list-table.php";
+   
+     unlink($target);
+}
+
+class Walker_Comment_Threaded extends Walker_Comment {
+    function start_lvl(&$output, $depth) {
+		$GLOBALS['comment_depth'] = $depth + 1;
+        
+        $output .= '[';
+        
+	}
+	
+	function end_lvl(&$output, $depth) {
+		$GLOBALS['comment_depth'] = $depth + 1;
+
+		$output .= '] ';
+	}
+	function start_el(&$output, $comment, $depth, $args) {
+		$depth++;
+		$GLOBALS['comment_depth'] = $depth;
+		$GLOBALS['comment'] = $comment;
+		extract($args, EXTR_SKIP);
+
+         if($args[0]['offset'] != '-1') $comment -> comment_page_number = $args[0]['offset'] / $args[0]['per_page'] + 1;
+          else $comment -> comment_page_number = 1;
+         $out = '';
+	    $out .= json_encode($comment);
+	    $out = substr($out, 0, -1);
+	    $out .= ', "comment_depth" : "'.$depth.'"';
+	    if(!empty( $args['has_children']) ){
+	    	$out .= ', "comment_children" : ';
+	    } 
+
+	    $output .= $out;
+	}
+	
+	
+	function end_el(&$output) {
+		$output .= '}, ';
+	}
+    
+    function walk( $elements, $max_depth) {
+        $args = array_slice(func_get_args(), 4);
+        $output = parent::walk( $elements, $max_depth, $args );
+        $output = str_replace(array(', }', ', ]'), array('}', ']'), '['.$output.']');
+        return $output;
+    }
+    
+    function paged_walk( $elements, $max_depth, $page_num, $per_page ) {
+
+        $args = array_slice(func_get_args(), 4);
+        $output = parent::paged_walk( $elements, $max_depth, $page_num, $per_page, $args );
+        $output = str_replace(array(', }', ', ]'), array('}', ']'), '['.$output.']');
+        return $output;
+    }
+    
+}

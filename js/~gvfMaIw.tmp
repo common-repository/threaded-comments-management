@@ -1,0 +1,275 @@
+jQuery(function($) {$(document).ready(function() {
+	//$("#move-to").suggest(ajaxurl + "?action=search-post-by-title", {delay: 500ms, minchars: 2});
+     var dropzone = [];
+     var history = [];
+     var postId = $("#comments-form input[name='p']").val();
+    
+     function commentTmpl(comment){ 
+          showDepth = comment['commentDepth'] + 1;
+
+          commentTmplHTML = '<tr id="comment-' + comment['commentId'] + '" class="approved depth-' + comment['commentDepth'] + ' droppable draggable"><th scope="row" class="check-column"><input type="checkbox" name="delete_comments[]" value="' + comment['commentId'] + '"></th><td class="author column-author"><strong><img alt="" src="' + comment['commentAuthorAvatar'] + '" class="avatar avatar-32 photo" height="32" width="32">' + comment['commentAuthor'] + '</strong><br><a href="mailto:' + comment['commentAuthorEmail'] + '">' + comment['commentAuthorEmail'] + '</a><br><a href="edit-comments.php?s=::1&amp;mode=detail">::1</a></td><td class="comment column-comment"><div class="depth-indicator depth-' + comment['commentDepth'] + '"><div class="depth-padding"><div class="submitted-on">Submitted on <a href="http://localhost/dev-wordpress/trunk/?p=' + postId + '#comment-' + comment['commentId'] + '">' + comment['commentDate'] + '</a>';
+
+          if(comment['commentParentId']) commentTmplHTML += ' | In reply to <a href="http://localhost/dev-wordpress/trunk/?p=' + postId + '#comment-' + comment['commentParentId'] + '">' + comment['commentParentAuthor'] + '</a>.';
+          
+          if(comment['commentNoc']) commentTmplHTML += ' | Has <span class="comment-noc">' + comment['commentNoc'] + '</span> replies.';
+          
+          commentTmplHTML += ' </div><p>' + comment['commentText'] + '</p><div id="inline-' + comment['commentId'] + '" class="hidden"><textarea class="comment" rows="1" cols="1">' + comment['commentText'] + '</textarea><div class="author-email">' + comment['commentAuthorEmail'] + '</div><div class="author">' + comment['commentAuthor'] + '</div><div class="author-url"></div><div class="comment_status">1</div></div><div class="row-actions">';
+          
+          if(comment['commentNoc']) commentTmplHTML += '<span class="expand"><a class="tc-show-more" href="#depth-' + showDepth + '">Expand</a></span>';
+
+          commentTmplHTML += '<span class="approve"><a href="comment.php?c=' + comment['commentId'] + '&amp;action=approvecomment" class="dim:the-comment-list:comment-' + comment['commentId'] + ':unapproved:e7e7d3:e7e7d3:new=approved vim-a" title="Approve this comment">Approve</a></span><span class="unapprove"> | <a href="comment.php?c=' + comment['commentId'] + '&amp;action=unapprovecomment" class="dim:the-comment-list:comment-' + comment['commentId'] + ':unapproved:e7e7d3:e7e7d3:new=unapproved vim-u" title="Unapprove this comment">Unapprove</a></span><span class="reply hide-if-no-js"> | <a onclick="commentReply.open( ' + "'" + comment['commentId'] + "','" + postId + "'" + ' );return false;" class="vim-r" title="Reply to this comment" href="#">Reply</a></span><span class="quickedit hide-if-no-js"> | <a onclick="commentReply.open( ' + "'" + comment['commentId'] + "','" + postId + "','edit'" + ' );return false;" class="vim-q" title="Quick Edit" href="#">Quick&nbsp;Edit</a></span><span class="edit"> | <a href="comment.php?action=editcomment&amp;c=' + comment['commentId'] + '" title="Edit comment">Edit</a></span><span class="spam"> | <a href="comment.php?c=' + comment['commentId'] + '&amp;action=spamcomment" class="delete:the-comment-list:comment-' + comment['commentId'] + '::spam=1 vim-s vim-destructive" title="Mark this comment as spam">Spam</a></span><span class="trash"> | <a href="comment.php?c=' + comment['commentId'] + '&amp;action=trashcomment" class="delete:the-comment-list:comment-' + comment['commentId'] + '::trash=1 delete vim-d vim-destructive" title="Move this comment to the trash">Trash</a></span></div></div></div></td></tr>';
+     
+          return commentTmplHTML;     
+     }
+     
+     restoreDropzone();
+
+     $("#dropzone.droppable").droppable({
+          scope : 'tc-comments',
+          drop: dropToDropzone,
+     });
+
+     draggibify($("#the-comment-list tr"));
+
+     $("#the-comment-list tr.droppable").droppable({
+          scope : 'tc-comments',
+          drop: dropToComment,
+          over: function(){$(this).css({'background' : 'rgba(33, 117, 155, 0.12)'})},
+          out: function(){$(this).css({'background' : 'white'})}
+     });
+
+	$("#move").click(function(e){
+		var button = $(this);
+		button.attr('disabled','disabled');
+		$("#move-to").val("");
+		var data = {
+			action: 'move-by-title',
+			title: $("#move-to").val(),
+			single: 'false',
+			c: $('[name=comment_ID]').val(),
+		};
+		
+		jQuery.post(ajaxurl, data, function(){button.removeAttr('disabled');});
+		
+		return false;
+	});
+	
+     $('tr.depth-2, tr.depth-3, tr.depth-4, tr.depth-5, tr.depth-6, tr.depth-7, tr.depth-8, tr.depth-9, tr.depth-10').hide();
+	
+	$('a.tc-show-more').live('click', function(){
+		t = $(this);
+		
+		depth = t.attr('href').substring(7);
+		untilDepth = depth - 1;
+		toShow = t.parents('tr').nextUntil('tr.depth-' + untilDepth).filter('.depth-'+depth).show();
+		$('a.tc-show-more', toShow).attr('class','tc-show-less').text('Collapse');
+		t.attr('class','tc-show-less').text('Collapse');
+	});
+	
+     $('a.tc-show-less').live('click', function(){
+		t = $(this);
+		
+		depth = t.attr('href').substring(7);
+		untilDepth = depth - 1;
+		toHide = t.parents('tr').nextUntil('tr.depth-' + untilDepth).hide();
+		$('a.tc-show-less', toHide).attr('class','tc-show-more').text('Expand');
+		t.attr('class','tc-show-more').text('Expand');
+	});
+
+     function dropToDropzone(event, ui){
+          $comment = $(ui.draggable);
+          
+          if($comment.is('li')) return;
+
+          $comment.draggable({ disabled: true });
+          $comment.droppable({ disabled: true });          
+
+          prepareComment($comment);
+          generatedComment = generateCommentForDropzone($comment.data());
+          
+          storableCommentVals = $.map($comment.data(), function(obj, key){if(key.substr(0,7) == "comment") return obj}); 
+          storableCommentKeys = $.map($comment.data(), function(obj, key){if(key.substr(0,7) == "comment") return key});
+          
+          var storableCommentData = new Object;
+          $.each(storableCommentKeys, function(index, key){ 
+               storableCommentData[key] = storableCommentVals[index]; 
+          });
+
+          dropzone.push(storableCommentData);
+
+          //storeDropzone();
+
+          $generatedComment = $(generatedComment).appendTo('#dropzone ul');
+          $generatedComment.data(storableCommentData);
+          draggibify($generatedComment);          
+          $(ui.draggable).addClass('tc-in-dropzone');
+     }
+
+     function dropToComment(event, ui){
+         $(this).css({'background' : 'white'});
+          commentId = $(ui.draggable).data('commentId');
+          prepareComment(this);          
+          parentId = $(this).data('commentId');
+
+          if(commentId == parentId) return;
+          
+          //reparentComment(commentId, parentId);
+          
+          if($('#comment-'+commentId)[0]){
+               $commentHTML = $('#comment-'+commentId);
+               $(this).after($commentHTML);
+               $commentHTML.removeClass('tc-in-dropzone');
+               draggibify($commentHTML);  
+               commentDepth = $commentHTML.data('commentDepth') + $(this).data('commentDepth');
+               commentChangeDepth($commentHTML, commentDepth);               
+          } else {
+               commentHTML = generateCommentForCommentList($(ui.draggable).data());    
+          }
+
+          removeFromDropzone(commentId);
+
+          $(ui.draggable).remove();
+     }
+
+     function commentChangeDepth(comment, depth){
+          $comment = $(comment);
+          $.map($comment.attr('class').split(" "), function(val){return (val.substr(0,5) == "depth") return val.substr(6)})
+          $comment.attr('class', classes);
+     }
+
+     function prepareComment(comment){
+          $comment = $(comment);    
+          if($comment.is('tr') && !$comment.data('commentAuthor'){
+      
+               $commentParent = $comment.find('td.comment .comment-parent');
+     
+               commentId           = $comment.attr('id').substr(8);
+               commentAuthorAvatar = $comment.find('.column-author strong img').attr('src');
+               commentAuthorUrl    = $comment.find('td.comment .author-url').text();
+               commentAuthorEmail  = $comment.find('td.comment .author-email').text();
+               commentAuthor       = $comment.find('td.comment .author').text();
+               commentText         = $comment.find('td.comment .comment').val();
+               commentParentId     = ($commentParent[0]) ? $.map($commentParent.attr('class').split(" "), function(val){if(val.substr(0,17) == "comment-parent-id") return val.substr(18)})[0] : '';
+               commentParentAuthor = ($commentParent[0]) ? $commentParent.text() : '';
+               commentStatus       = $comment.find('td.comment .comment_status').text();
+               commentDate         = $comment.find('.comment-submitted-on').text();
+               commentDepth        = $.map($comment.attr('class').split(" "), function(val){if(val.substr(0,5) == "depth") return val.substr(6)})[0];
+               commentNoc          = $comment.find('.comment-noc').text();  
+               commentWpNonce      = 0;
+               
+               $comment.data({
+                    'commentId'             : commentId,
+                    'commentAuthorAvatar'   : commentAuthorAvatar,
+                    'commentAuthorEmail'    : commentAuthorEmail,
+                    'commentAuthorUrl'      : commentAuthorUrl,
+                    'commentAuthor'         : commentAuthor,
+                    'commentText'           : commentText,
+                    'commentParentId'       : commentParentId,
+                    'commentParentAuthor'   : commentParentAuthor,    
+                    'commentDate'           : commentDate,
+                    'commentDepth'          : commentDepth,
+                    'commentNoc'            : commentNoc,
+                    'commentStatus'         : commentStatus,
+                    'commentWithSubthread'  : true,
+                    'commentWpNonce'        : commentWpNonce,
+                    'postId'                : postId,
+               });            
+          }
+     };
+
+
+     function disableObject(obj){
+     
+     }
+
+     function reparentComment(commentId, parentId){
+          var data = {
+			action: 'reparent-comment',
+			parent: parentId,
+			single: 'false',
+			c: commentId,
+               returncommentsubthread: 'true',
+		};
+		if(commentId == 1) return false;
+		jQuery.post(ajaxurl, data, function(subthread){
+               $("#comment-"+parentId).after(subthread);               
+               $(".draggable").draggable({ disabled: true });
+               $(".draggable").draggable({ revert : true, scope : 'comments', cursor: 'move'});
+
+               $("#the-comment-list tr.droppable").droppable({ disabled: true });
+               $("#the-comment-list tr.droppable").droppable({
+                    scope : 'tc-comments',
+                    drop: dropToComment,
+                    over: function(){$(this).addClass('tc-drop-over')},
+                    out: function(){$(this).removeClass('tc-drop-over')}
+               });
+          });
+     }
+
+     
+     function generateCommentForDropzone(comment){
+          commentHTML = "<li class='draggable'><span class='comment-cb'><input type='checkbox' name='tc-move-comments[]' value='"+comment['commentId']+"'></span><span class='comment-author'>"+comment['commentAuthor']+"</span><span class='comment-text'>"+comment['commentText']+"</span><span class='comment-time'>"+comment['commentDate']+"</span></li>";
+          
+
+          return commentHTML;
+     }
+     
+     function generateCommentForCommentList(comment){
+          
+          return commentHTML;
+     }
+
+     function removeFromDropzone(commentId){
+          dropzone = $.map(dropzone, function(obj){ if(obj["commentId"] != commentId) return obj});
+          storeDropzone();
+     }
+
+     function storeDropzone(){
+          amplify.store('tc-comments-dropzone', dropzone);
+     }
+
+     function clearDropzone(){
+          amplify.store('tc-comments-dropzone', null);
+          dropzone = [];
+          $("#dropzone ul li").remove();
+          $("#the-comment-list .tc-in-dropzone").removeClass('tc-in-dropzone');
+     }     
+     
+     function restoreDropzone(){
+          dropzone = amplify.store('tc-comments-dropzone');
+          if(dropzone) $.each(dropzone, function(index, data){ 
+               console.debug(data);
+               commentHTML = generateCommentForDropzone(data);  
+               comment = $("#dropzone ul").append(commentHTML);
+               $(comment).data(data);                             
+               commentId = $(comment).data('commentId');
+               $("#comment-" + commentId).addClass('tc-in-dropzone');
+               
+          });
+          else dropzone = [];  
+     }
+
+     function draggibify(obj){
+          if($(obj).is('li')){
+               $(obj).draggable({ revert : true, scope : 'tc-comments', cursor: 'move'});
+          } else {
+               $(obj).draggable({ revert : true, scope : 'tc-comments', cursor: 'move', helper: 
+                    function(event){
+                         row = $(event.target).closest('tr').clone();
+                         commentId = row.attr('id').substr(8);
+                         row.attr('id', '');
+                         row.data('commentId', commentId);
+                         return $('<div class="tc-drag-comment"><table></table></div>').find('table').append(row).end().appendTo('body');
+                    }
+               ,}).each(function(){
+                    commentId = $(this).attr('id');
+                    if(commentId.substr(0,7) == "comment"){
+                         commentId = commentId.substr(8);
+                         $(this).data('commentId', commentId);          
+                    }          
+               });
+          }     
+     }
+})});
+
+
